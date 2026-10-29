@@ -25,6 +25,7 @@ Exactly one execution source is required: `spec.worker` (preferred), `spec.worke
 | `spec.podOverrides.labels` | Additional labels to apply to the Job and its Pod. Merged with built-in labels; built-in labels take precedence on conflict | No |
 | `spec.podOverrides.resources` | CPU/memory requests and limits for the agent container | No |
 | `spec.podOverrides.activeDeadlineSeconds` | Maximum duration in seconds before the agent pod is terminated | No |
+| `spec.podOverrides.terminationGracePeriodSeconds` | Seconds the kubelet waits after SIGTERM before killing the pod's containers (minimum 0, default 30). When the pod ends at `activeDeadlineSeconds`, the agent container is signaled first and native sidecars (`extraInitContainers` with `restartPolicy: Always`) after it, within this one period; raise it when a sidecar needs time for final work | No |
 | `spec.podOverrides.env` | Additional environment variables (built-in vars take precedence on conflict; the proxy variables `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` (and lowercase forms) and `GIT_SSL_CAINFO` also reach the `git-clone` and `branch-setup` init containers) | No |
 | `spec.podOverrides.nodeSelector` | Node selection labels to constrain which nodes run agent pods | No |
 | `spec.podOverrides.tolerations` | Tolerations for the agent pod; use with `nodeSelector` or `affinity` to target dedicated node pools (e.g., GPU nodes, agent-specific pools) | No |

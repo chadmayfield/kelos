@@ -97,6 +97,17 @@ type PodOverrides struct {
 	// +kubebuilder:validation:Minimum=1
 	ActiveDeadlineSeconds *int64 `json:"activeDeadlineSeconds,omitempty"`
 
+	// TerminationGracePeriodSeconds is the time in seconds the kubelet waits
+	// for the pod's containers to stop after sending SIGTERM, before it kills
+	// them. When the pod ends because of ActiveDeadlineSeconds, the agent
+	// container is signaled first and native sidecars (extraInitContainers
+	// with restartPolicy Always) after it, all within this one period. Raise
+	// it when a sidecar needs time for final work, such as a last push.
+	// Defaults to the Kubernetes default (30) when omitted.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	TerminationGracePeriodSeconds *int64 `json:"terminationGracePeriodSeconds,omitempty"`
+
 	// Env specifies additional environment variables for the agent container.
 	// These are appended after the built-in env vars (credentials, model, GitHub token).
 	// If a user-specified env var conflicts with a built-in one, the built-in takes precedence.

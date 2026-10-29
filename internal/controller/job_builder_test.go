@@ -2176,6 +2176,94 @@ func TestBuildJob_PodOverridesActiveDeadlineSeconds(t *testing.T) {
 	}
 }
 
+func TestBuildJob_PodOverridesTerminationGracePeriodSeconds(t *testing.T) {
+	newTask := func(po *kelos.PodOverrides) *kelos.Task {
+		return &kelos.Task{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-grace", Namespace: "default"},
+			Spec: kelos.TaskSpec{
+				Type:   AgentTypeClaudeCode,
+				Prompt: "Fix issue",
+				Credentials: &kelos.Credentials{
+					Type:      kelos.CredentialTypeAPIKey,
+					SecretRef: &kelos.SecretReference{Name: "my-secret"},
+				},
+				PodOverrides: po,
+			},
+		}
+	}
+
+	t.Run("set", func(t *testing.T) {
+		task := newTask(&kelos.PodOverrides{TerminationGracePeriodSeconds: int64Ptr(120)})
+		job, err := NewJobBuilder().Build(task, nil, nil, task.Spec.Prompt)
+		if err != nil {
+			t.Fatalf("Build() returned error: %v", err)
+		}
+		got := job.Spec.Template.Spec.TerminationGracePeriodSeconds
+		if got == nil || *got != 120 {
+			t.Errorf("Expected TerminationGracePeriodSeconds 120, got %v", got)
+		}
+	})
+
+	t.Run("zero", func(t *testing.T) {
+		task := newTask(&kelos.PodOverrides{TerminationGracePeriodSeconds: int64Ptr(0)})
+		job, err := NewJobBuilder().Build(task, nil, nil, task.Spec.Prompt)
+		if err != nil {
+			t.Fatalf("Build() returned error: %v", err)
+		}
+		got := job.Spec.Template.Spec.TerminationGracePeriodSeconds
+		if got == nil || *got != 0 {
+			t.Errorf("Expected TerminationGracePeriodSeconds 0, got %v", got)
+		}
+	})
+
+	t.Run("unset", func(t *testing.T) {
+		task := newTask(&kelos.PodOverrides{ActiveDeadlineSeconds: int64Ptr(60)})
+		job, err := NewJobBuilder().Build(task, nil, nil, task.Spec.Prompt)
+		if err != nil {
+			t.Fatalf("Build() returned error: %v", err)
+		}
+		if got := job.Spec.Template.Spec.TerminationGracePeriodSeconds; got != nil {
+			t.Errorf("Expected TerminationGracePeriodSeconds to be nil, got %d", *got)
+		}
+	})
+
+	t.Run("no overrides", func(t *testing.T) {
+		task := newTask(nil)
+		job, err := NewJobBuilder().Build(task, nil, nil, task.Spec.Prompt)
+		if err != nil {
+			t.Fatalf("Build() returned error: %v", err)
+		}
+		if got := job.Spec.Template.Spec.TerminationGracePeriodSeconds; got != nil {
+			t.Errorf("Expected TerminationGracePeriodSeconds to be nil, got %d", *got)
+		}
+	})
+}
+
+func TestPodOverridesTerminationGracePeriodSecondsJSONRoundTrip(t *testing.T) {
+	// The Task CRD rejects a spec that differs from the stored one, so an
+	// unset value must not appear in the serialized object.
+	unset, err := json.Marshal(kelos.PodOverrides{})
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	if strings.Contains(string(unset), "terminationGracePeriodSeconds") {
+		t.Errorf("Unset field was serialized: %s", unset)
+	}
+
+	in := kelos.PodOverrides{TerminationGracePeriodSeconds: int64Ptr(90)}
+	data, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	var out kelos.PodOverrides
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if !reflect.DeepEqual(in, out) {
+		t.Errorf("Round trip changed the value: %s", data)
+	}
+}
+
 func TestBuildJob_PodOverridesEnv(t *testing.T) {
 	builder := NewJobBuilder()
 	task := &kelos.Task{

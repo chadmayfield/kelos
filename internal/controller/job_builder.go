@@ -856,6 +856,7 @@ fi`,
 	// are reflected in the final spec.
 	var serviceAccountName string
 	var activeDeadlineSeconds *int64
+	var terminationGracePeriodSeconds *int64
 	var nodeSelector map[string]string
 	var extraLabels map[string]string
 	var tolerations []corev1.Toleration
@@ -873,6 +874,10 @@ fi`,
 
 		if po.ActiveDeadlineSeconds != nil {
 			activeDeadlineSeconds = po.ActiveDeadlineSeconds
+		}
+
+		if po.TerminationGracePeriodSeconds != nil {
+			terminationGracePeriodSeconds = po.TerminationGracePeriodSeconds
 		}
 
 		if len(po.Env) > 0 {
@@ -1013,16 +1018,17 @@ fi`,
 					Labels: jobLabels,
 				},
 				Spec: corev1.PodSpec{
-					RestartPolicy:      corev1.RestartPolicyNever,
-					SecurityContext:    podSecurityContext,
-					ServiceAccountName: serviceAccountName,
-					InitContainers:     initContainers,
-					Volumes:            volumes,
-					Containers:         containers,
-					NodeSelector:       nodeSelector,
-					Tolerations:        tolerations,
-					Affinity:           affinity,
-					ImagePullSecrets:   imagePullSecrets,
+					RestartPolicy:                 corev1.RestartPolicyNever,
+					SecurityContext:               podSecurityContext,
+					ServiceAccountName:            serviceAccountName,
+					InitContainers:                initContainers,
+					Volumes:                       volumes,
+					Containers:                    containers,
+					NodeSelector:                  nodeSelector,
+					Tolerations:                   tolerations,
+					Affinity:                      affinity,
+					ImagePullSecrets:              imagePullSecrets,
+					TerminationGracePeriodSeconds: terminationGracePeriodSeconds,
 				},
 			},
 		},

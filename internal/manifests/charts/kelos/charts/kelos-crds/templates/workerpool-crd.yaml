@@ -5097,6 +5097,18 @@ spec:
                           Use with workload identity systems such as IRSA on EKS, GKE
                           Workload Identity, or Azure Workload Identity.
                         type: string
+                      terminationGracePeriodSeconds:
+                        description: |-
+                          TerminationGracePeriodSeconds is the time in seconds the kubelet waits
+                          for the pod's containers to stop after sending SIGTERM, before it kills
+                          them. When the pod ends because of ActiveDeadlineSeconds, the agent
+                          container is signaled first and native sidecars (extraInitContainers
+                          with restartPolicy Always) after it, all within this one period. Raise
+                          it when a sidecar needs time for final work, such as a last push.
+                          Defaults to the Kubernetes default (30) when omitted.
+                        format: int64
+                        minimum: 0
+                        type: integer
                       tolerations:
                         description: |-
                           Tolerations allows agent pods to be scheduled on nodes with matching
