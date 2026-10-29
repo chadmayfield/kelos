@@ -100,8 +100,10 @@ type PodOverrides struct {
 	// Env specifies additional environment variables for the agent container.
 	// These are appended after the built-in env vars (credentials, model, GitHub token).
 	// If a user-specified env var conflicts with a built-in one, the built-in takes precedence.
-	// Applies only to the agent container; configure additional containers
-	// directly via ExtraContainers or ExtraInitContainers.
+	// Applies to the agent container. Only HTTPS_PROXY, HTTP_PROXY, NO_PROXY,
+	// their lowercase forms and GIT_SSL_CAINFO are also copied to the
+	// git-clone and branch-setup init containers. Configure additional
+	// containers directly via ExtraContainers or ExtraInitContainers.
 	// +optional
 	Env []corev1.EnvVar `json:"env,omitempty"`
 
@@ -143,8 +145,10 @@ type PodOverrides struct {
 	// agent container. Names must reference either a user-supplied volume
 	// from Volumes or a Kelos-managed volume ("workspace", "kelos-plugin",
 	// "kelos-github-token").
-	// Applies only to the agent container; configure additional containers
-	// directly via ExtraContainers or ExtraInitContainers.
+	// Applies to the agent container. A mount of a volume named "proxy-ca" is
+	// also added read-only to the git-clone and branch-setup init containers.
+	// Configure additional containers directly via ExtraContainers or
+	// ExtraInitContainers.
 	// +optional
 	VolumeMounts []corev1.VolumeMount `json:"volumeMounts,omitempty"`
 

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -6369,5 +6370,206 @@ func TestBuildJob_WorkerSpecOverridesLegacy(t *testing.T) {
 	if apiKeyEnv.ValueFrom.SecretKeyRef.LocalObjectReference.Name != "worker-secret" {
 		t.Errorf("CODEX_API_KEY secret name: expected %q, got %q",
 			"worker-secret", apiKeyEnv.ValueFrom.SecretKeyRef.LocalObjectReference.Name)
+	}
+}
+
+func gitInitProxyTask(po *kelos.PodOverrides) *kelos.Task {
+	return &kelos.Task{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-git-init-proxy",
+			Namespace: "default",
+		},
+		Spec: kelos.TaskSpec{
+			Type:   AgentTypeClaudeCode,
+			Prompt: "Fix issue",
+			Branch: "feature-p",
+			Credentials: &kelos.Credentials{
+				Type:      kelos.CredentialTypeAPIKey,
+				SecretRef: &kelos.SecretReference{Name: "my-secret"},
+			},
+			PodOverrides: po,
+		},
+	}
+}
+
+func gitInitProxyWorkspace() *kelos.WorkspaceSpec {
+	return &kelos.WorkspaceSpec{
+		Repo:      "https://github.com/example/repo.git",
+		Ref:       "main",
+		SecretRef: &kelos.SecretReference{Name: "github-token"},
+	}
+}
+
+func TestBuildJob_GitInitProxyOverrides(t *testing.T) {
+	task := gitInitProxyTask(&kelos.PodOverrides{
+		Env: []corev1.EnvVar{
+			{Name: "HTTPS_PROXY", Value: "http://squid:3128"},
+			{Name: "https_proxy", Value: "http://squid:3128"},
+			{Name: "HTTP_PROXY", Value: "http://squid:3128"},
+			{Name: "http_proxy", Value: "http://squid:3128"},
+			{Name: "NO_PROXY", Value: "localhost"},
+			{Name: "no_proxy", Value: "localhost"},
+			{Name: "GIT_SSL_CAINFO", Value: "/etc/kelos-proxy-ca/ca.crt"},
+			{Name: "OTHER_VAR", Value: "nope"},
+			{Name: "KELOS_SETUP_COMMAND", Value: `["echo","attacker"]`},
+			{Name: "GITHUB_TOKEN", Value: "forged"},
+		},
+		Volumes: []corev1.Volume{{
+			Name:         "proxy-ca",
+			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+		}},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: "proxy-ca", MountPath: "/etc/kelos-proxy-ca"},
+			{Name: "other-vol", MountPath: "/other"},
+		},
+	})
+
+	job, err := NewJobBuilder().Build(task, gitInitProxyWorkspace(), nil, task.Spec.Prompt)
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
+
+	seen := 0
+	for _, c := range job.Spec.Template.Spec.InitContainers {
+		if c.Name != "git-clone" && c.Name != "branch-setup" {
+			continue
+		}
+		seen++
+		counts := map[string]int{}
+		values := map[string]string{}
+		for _, e := range c.Env {
+			counts[e.Name]++
+			values[e.Name] = e.Value
+		}
+		for name := range gitInitProxyEnvNames {
+			if counts[name] != 1 {
+				t.Errorf("%s: expected one %s, got %d", c.Name, name, counts[name])
+			}
+		}
+		if values["HTTPS_PROXY"] != "http://squid:3128" {
+			t.Errorf("%s: HTTPS_PROXY = %q", c.Name, values["HTTPS_PROXY"])
+		}
+		if values["GIT_SSL_CAINFO"] != "/etc/kelos-proxy-ca/ca.crt" {
+			t.Errorf("%s: GIT_SSL_CAINFO = %q", c.Name, values["GIT_SSL_CAINFO"])
+		}
+		if counts["OTHER_VAR"] != 0 {
+			t.Errorf("%s: non-allowlisted OTHER_VAR was copied", c.Name)
+		}
+		if counts["KELOS_SETUP_COMMAND"] != 0 {
+			t.Errorf("%s: reserved KELOS_SETUP_COMMAND was copied", c.Name)
+		}
+		if counts["GITHUB_TOKEN"] > 1 || values["GITHUB_TOKEN"] == "forged" {
+			t.Errorf("%s: user GITHUB_TOKEN reached the init container", c.Name)
+		}
+		var ca *corev1.VolumeMount
+		for i, m := range c.VolumeMounts {
+			if m.Name == "other-vol" {
+				t.Errorf("%s: non-proxy mount other-vol was copied", c.Name)
+			}
+			if m.Name == "proxy-ca" {
+				ca = &c.VolumeMounts[i]
+			}
+		}
+		if ca == nil {
+			t.Fatalf("%s: proxy-ca mount missing", c.Name)
+		}
+		if !ca.ReadOnly {
+			t.Errorf("%s: proxy-ca mount must be read-only", c.Name)
+		}
+		if ca.MountPath != "/etc/kelos-proxy-ca" {
+			t.Errorf("%s: proxy-ca mountPath = %q", c.Name, ca.MountPath)
+		}
+	}
+	if seen != 2 {
+		t.Fatalf("Expected git-clone and branch-setup init containers, saw %d", seen)
+	}
+
+	// The user mount on the agent container keeps its own read-only setting.
+	for _, m := range job.Spec.Template.Spec.Containers[0].VolumeMounts {
+		if m.Name == "proxy-ca" && m.ReadOnly {
+			t.Error("Agent container mount must not be modified")
+		}
+	}
+}
+
+func TestBuildJob_GitInitProxyOverridesAbsent(t *testing.T) {
+	task := gitInitProxyTask(&kelos.PodOverrides{
+		Env: []corev1.EnvVar{{Name: "OTHER_VAR", Value: "x"}},
+	})
+
+	job, err := NewJobBuilder().Build(task, gitInitProxyWorkspace(), nil, task.Spec.Prompt)
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
+
+	ref := gitInitProxyTask(nil)
+	refJob, err := NewJobBuilder().Build(ref, gitInitProxyWorkspace(), nil, ref.Spec.Prompt)
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
+
+	for i, c := range job.Spec.Template.Spec.InitContainers {
+		want := refJob.Spec.Template.Spec.InitContainers[i]
+		if !reflect.DeepEqual(c.Env, want.Env) {
+			t.Errorf("%s: env changed without proxy overrides: %v", c.Name, c.Env)
+		}
+		if !reflect.DeepEqual(c.VolumeMounts, want.VolumeMounts) {
+			t.Errorf("%s: mounts changed without proxy overrides: %v", c.Name, c.VolumeMounts)
+		}
+	}
+}
+
+func TestApplyGitInitProxyOverrides_DoesNotMutateSharedEnv(t *testing.T) {
+	// Both containers share one backing array with spare capacity, the way
+	// git-clone shares the workspace env slice. Appending in place would
+	// write into that array.
+	backing := make([]corev1.EnvVar, 1, 4)
+	backing[0] = corev1.EnvVar{Name: "GH_TOKEN", Value: "builtin"}
+	containers := []corev1.Container{
+		{Name: "git-clone", Env: backing},
+		{Name: "branch-setup", Env: backing},
+	}
+	po := &kelos.PodOverrides{
+		Env: []corev1.EnvVar{{Name: "HTTPS_PROXY", Value: "http://squid:3128"}},
+	}
+
+	applyGitInitProxyOverrides(containers, po)
+
+	for _, c := range containers {
+		if len(c.Env) != 2 || c.Env[1].Name != "HTTPS_PROXY" {
+			t.Errorf("%s: expected GH_TOKEN and HTTPS_PROXY, got %v", c.Name, c.Env)
+		}
+	}
+	if extra := backing[:cap(backing)][1]; extra.Name != "" {
+		t.Errorf("Shared backing array was modified: %v", extra)
+	}
+	if len(backing) != 1 || backing[0].Value != "builtin" {
+		t.Errorf("Shared env slice changed: %v", backing)
+	}
+}
+
+func TestApplyGitInitProxyOverrides_BuiltinWinsOverProxyName(t *testing.T) {
+	containers := []corev1.Container{
+		{Name: "git-clone", Env: []corev1.EnvVar{{Name: "HTTPS_PROXY", Value: "builtin"}}},
+	}
+	po := &kelos.PodOverrides{
+		Env: []corev1.EnvVar{
+			{Name: "HTTPS_PROXY", Value: "user"},
+			{Name: "NO_PROXY", Value: "localhost"},
+			{Name: "NO_PROXY", Value: "duplicate"},
+		},
+	}
+
+	applyGitInitProxyOverrides(containers, po)
+
+	got := map[string][]string{}
+	for _, e := range containers[0].Env {
+		got[e.Name] = append(got[e.Name], e.Value)
+	}
+	if !reflect.DeepEqual(got["HTTPS_PROXY"], []string{"builtin"}) {
+		t.Errorf("Built-in HTTPS_PROXY must win, got %v", got["HTTPS_PROXY"])
+	}
+	if !reflect.DeepEqual(got["NO_PROXY"], []string{"localhost"}) {
+		t.Errorf("Expected a single NO_PROXY=localhost, got %v", got["NO_PROXY"])
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -111,23 +112,53 @@ func isGitRepo(r runner) bool {
 }
 
 func capturePRs(r runner, branch string) []string {
+	// The push goes to origin, so its owner and repo are the source of
+	// truth. gh's own {owner} and {repo} placeholders are not used: on a
+	// fork with an upstream remote gh fills them with the upstream owner.
+	owner, repo, ok := originOwnerRepo(r)
+	if !ok {
+		return nil
+	}
+
 	// Check origin repo (current behavior)
-	lines := queryPRs(r, branch, "")
+	lines := queryPRs(r, branch, owner, owner+"/"+repo)
 
 	// Also check upstream repo if set (fork workflow)
 	if upstreamRepo := os.Getenv("KELOS_UPSTREAM_REPO"); upstreamRepo != "" {
-		lines = append(lines, queryPRs(r, branch, upstreamRepo)...)
+		lines = append(lines, queryPRs(r, branch, owner, upstreamRepo)...)
 	}
 
 	return lines
 }
 
-func queryPRs(r runner, branch, repo string) []string {
-	args := []string{"pr", "list", "--head", branch, "--json", "url"}
-	if repo != "" {
-		args = append(args, "--repo", repo)
+// originURLRE matches the HTTPS, ssh:// and scp-like forms of a git remote
+// URL and captures the owner and repository name.
+var originURLRE = regexp.MustCompile(`^(?:[a-z+]+://(?:[^@/]+@)?[^/]+/|[^@/:]+@[^:/]+:)([^/]+)/([^/]+?)(?:\.git)?/?$`)
+
+// originOwnerRepo returns the owner and repository of the origin remote.
+func originOwnerRepo(r runner) (owner, repo string, ok bool) {
+	out, err := r.run("git", "remote", "get-url", "origin")
+	if err != nil {
+		return "", "", false
 	}
-	output, err := r.run("gh", args...)
+	m := originURLRE.FindStringSubmatch(strings.TrimSpace(out))
+	if m == nil {
+		return "", "", false
+	}
+	return m[1], m[2], true
+}
+
+// queryPRs lists open PRs in target ("owner/repo") whose head is
+// headOwner:branch. It uses the REST API because "gh pr list" calls GraphQL.
+// The endpoint is literal and the filters are raw fields (-f), which gh
+// sends as given. gh expands {owner}, :owner and similar only in the
+// endpoint and in -F fields, so a branch named "owner-fix" is safe.
+func queryPRs(r runner, branch, headOwner, target string) []string {
+	output, err := r.run("gh", "api", "repos/"+target+"/pulls",
+		"--method", "GET",
+		"-f", "head="+headOwner+":"+branch,
+		"-f", "state=open",
+		"--jq", "[.[]|{url:.html_url}]")
 	if err != nil || output == "" {
 		return nil
 	}

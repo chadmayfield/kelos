@@ -132,6 +132,63 @@ var reservedEnvNames = map[string]struct{}{
 	"KELOS_SESSION_SETUP_ONLY": {},
 }
 
+// gitInitProxyEnvNames lists the only PodOverrides.Env names that are copied
+// into init containers that run git against the remote (git-clone and
+// branch-setup). Everything else in PodOverrides.Env reaches the agent
+// container only.
+var gitInitProxyEnvNames = map[string]struct{}{
+	"HTTPS_PROXY":    {},
+	"HTTP_PROXY":     {},
+	"NO_PROXY":       {},
+	"https_proxy":    {},
+	"http_proxy":     {},
+	"no_proxy":       {},
+	"GIT_SSL_CAINFO": {},
+}
+
+// GitInitProxyCAVolumeName is the volume name of the one
+// PodOverrides.VolumeMounts entry that is also mounted, read-only, into
+// init containers that run git against the remote. It cannot start with the
+// reserved "kelos-" prefix because the volume itself is declared in
+// PodOverrides.Volumes.
+const GitInitProxyCAVolumeName = "proxy-ca"
+
+// applyGitInitProxyOverrides copies the allowlisted proxy env vars and the
+// proxy CA mount from the pod overrides into the init containers that run
+// git against the remote. Env vars already set on the init container win.
+func applyGitInitProxyOverrides(initContainers []corev1.Container, po *kelos.PodOverrides) {
+	for i := range initContainers {
+		c := &initContainers[i]
+		if c.Name != "git-clone" && c.Name != "branch-setup" {
+			continue
+		}
+		existing := make(map[string]struct{}, len(c.Env))
+		for _, e := range c.Env {
+			existing[e.Name] = struct{}{}
+		}
+		// Copy before appending so the slice shared with other
+		// containers is never mutated.
+		env := append([]corev1.EnvVar(nil), c.Env...)
+		for _, e := range po.Env {
+			if _, ok := gitInitProxyEnvNames[e.Name]; !ok {
+				continue
+			}
+			if _, exists := existing[e.Name]; exists {
+				continue
+			}
+			existing[e.Name] = struct{}{}
+			env = append(env, e)
+		}
+		c.Env = env
+		for _, m := range po.VolumeMounts {
+			if m.Name == GitInitProxyCAVolumeName {
+				m.ReadOnly = true
+				c.VolumeMounts = append(c.VolumeMounts, m)
+			}
+		}
+	}
+}
+
 // JobBuilder constructs Kubernetes Jobs for Tasks.
 type JobBuilder struct {
 	ClaudeCodeImage           string
@@ -870,6 +927,8 @@ fi`,
 		if len(po.VolumeMounts) > 0 {
 			mainContainer.VolumeMounts = append(mainContainer.VolumeMounts, po.VolumeMounts...)
 		}
+
+		applyGitInitProxyOverrides(initContainers, po)
 
 		if po.PodSecurityContext != nil {
 			merged := po.PodSecurityContext.DeepCopy()
