@@ -23,6 +23,9 @@ func (m mockRunner) run(name string, args ...string) (string, error) {
 	if r, ok := m.commands[key]; ok {
 		return r.output, r.err
 	}
+	if key == "git remote get-url origin" {
+		return "https://github.com/org/repo.git", nil
+	}
 	return "", fmt.Errorf("command not mocked: %s", key)
 }
 
@@ -30,7 +33,7 @@ func TestCaptureOutputsFullFlow(t *testing.T) {
 	r := mockRunner{commands: map[string]mockResult{
 		"git rev-parse --is-inside-work-tree": {output: "true"},
 		"git branch --show-current":           {output: "feature/test-branch"},
-		"gh pr list --head feature/test-branch --json url": {
+		"gh api repos/org/repo/pulls --method GET -f head=org:feature/test-branch -f state=open --jq [.[]|{url:.html_url}]": {
 			output: `[{"url":"https://github.com/org/repo/pull/42"}]`,
 		},
 		"git rev-parse HEAD":                        {output: "abc1234def5678"},
@@ -62,7 +65,7 @@ func TestCaptureOutputsBaseBranchFromEnv(t *testing.T) {
 	r := mockRunner{commands: map[string]mockResult{
 		"git rev-parse --is-inside-work-tree": {output: "true"},
 		"git branch --show-current":           {output: "my-branch"},
-		"gh pr list --head my-branch --json url": {
+		"gh api repos/org/repo/pulls --method GET -f head=org:my-branch -f state=open --jq [.[]|{url:.html_url}]": {
 			output: `[]`,
 		},
 		"git rev-parse HEAD": {output: "deadbeef"},
@@ -98,7 +101,7 @@ func TestCaptureOutputsMultiplePRs(t *testing.T) {
 	r := mockRunner{commands: map[string]mockResult{
 		"git rev-parse --is-inside-work-tree": {output: "true"},
 		"git branch --show-current":           {output: "feature"},
-		"gh pr list --head feature --json url": {
+		"gh api repos/org/repo/pulls --method GET -f head=org:feature -f state=open --jq [.[]|{url:.html_url}]": {
 			output: `[{"url":"https://github.com/org/repo/pull/1"},{"url":"https://github.com/org/repo/pull/2"}]`,
 		},
 		"git rev-parse HEAD":                        {output: "aaa"},
@@ -140,9 +143,9 @@ func TestCaptureOutputsDetachedHead(t *testing.T) {
 
 func TestCaptureOutputsGhFails(t *testing.T) {
 	r := mockRunner{commands: map[string]mockResult{
-		"git rev-parse --is-inside-work-tree":       {output: "true"},
-		"git branch --show-current":                 {output: "branch"},
-		"gh pr list --head branch --json url":       {err: fmt.Errorf("gh not found")},
+		"git rev-parse --is-inside-work-tree": {output: "true"},
+		"git branch --show-current":           {output: "branch"},
+		"gh api repos/org/repo/pulls --method GET -f head=org:branch -f state=open --jq [.[]|{url:.html_url}]": {err: fmt.Errorf("gh not found")},
 		"git rev-parse HEAD":                        {output: "abc"},
 		"git symbolic-ref refs/remotes/origin/HEAD": {output: "refs/remotes/origin/main"},
 	}}
@@ -162,9 +165,9 @@ func TestCaptureOutputsGhFails(t *testing.T) {
 func TestCaptureOutputsMarkers(t *testing.T) {
 	// Verify that Run() would emit markers by checking captureOutputs returns non-empty.
 	r := mockRunner{commands: map[string]mockResult{
-		"git rev-parse --is-inside-work-tree":       {output: "true"},
-		"git branch --show-current":                 {output: "test"},
-		"gh pr list --head test --json url":         {output: "[]"},
+		"git rev-parse --is-inside-work-tree": {output: "true"},
+		"git branch --show-current":           {output: "test"},
+		"gh api repos/org/repo/pulls --method GET -f head=org:test -f state=open --jq [.[]|{url:.html_url}]": {output: "[]"},
 		"git rev-parse HEAD":                        {output: "abc"},
 		"git symbolic-ref refs/remotes/origin/HEAD": {err: fmt.Errorf("no remote")},
 	}}
@@ -200,7 +203,7 @@ func TestCaptureOutputsNoMarkersWhenEmpty(t *testing.T) {
 
 func TestCapturePRsInvalidJSON(t *testing.T) {
 	r := mockRunner{commands: map[string]mockResult{
-		"gh pr list --head branch --json url": {output: "not json"},
+		"gh api repos/org/repo/pulls --method GET -f head=org:branch -f state=open --jq [.[]|{url:.html_url}]": {output: "not json"},
 	}}
 
 	prs := capturePRs(r, "branch")
@@ -227,10 +230,10 @@ func TestCaptureOutputsWithUpstreamRepo(t *testing.T) {
 	r := mockRunner{commands: map[string]mockResult{
 		"git rev-parse --is-inside-work-tree": {output: "true"},
 		"git branch --show-current":           {output: "fix-branch"},
-		"gh pr list --head fix-branch --json url": {
+		"gh api repos/org/repo/pulls --method GET -f head=org:fix-branch -f state=open --jq [.[]|{url:.html_url}]": {
 			output: `[{"url":"https://github.com/my-fork/repo/pull/1"}]`,
 		},
-		"gh pr list --head fix-branch --json url --repo upstream-org/repo": {
+		"gh api repos/upstream-org/repo/pulls --method GET -f head=org:fix-branch -f state=open --jq [.[]|{url:.html_url}]": {
 			output: `[{"url":"https://github.com/upstream-org/repo/pull/99"}]`,
 		},
 		"git rev-parse HEAD":                        {output: "abc123"},
@@ -256,10 +259,10 @@ func TestCaptureOutputsUpstreamRepoNoPRs(t *testing.T) {
 	r := mockRunner{commands: map[string]mockResult{
 		"git rev-parse --is-inside-work-tree": {output: "true"},
 		"git branch --show-current":           {output: "fix-branch"},
-		"gh pr list --head fix-branch --json url": {
+		"gh api repos/org/repo/pulls --method GET -f head=org:fix-branch -f state=open --jq [.[]|{url:.html_url}]": {
 			output: `[]`,
 		},
-		"gh pr list --head fix-branch --json url --repo upstream-org/repo": {
+		"gh api repos/upstream-org/repo/pulls --method GET -f head=org:fix-branch -f state=open --jq [.[]|{url:.html_url}]": {
 			output: `[]`,
 		},
 		"git rev-parse HEAD":                        {output: "abc123"},
@@ -360,4 +363,97 @@ func TestMain(m *testing.M) {
 	os.Unsetenv("KELOS_AGENT_TYPE")
 	os.Unsetenv("KELOS_UPSTREAM_REPO")
 	os.Exit(m.Run())
+}
+
+func prListKey(target, headOwner, branch string) string {
+	return "gh api repos/" + target + "/pulls --method GET -f head=" + headOwner + ":" + branch +
+		" -f state=open --jq [.[]|{url:.html_url}]"
+}
+
+func TestCapturePRsUsesOriginOwnerNotGhPlaceholders(t *testing.T) {
+	t.Setenv("KELOS_UPSTREAM_REPO", "upstream-org/repo")
+	// Fork with an upstream remote: origin is the fork, and the head filter
+	// uses the fork owner for both repos.
+	r := mockRunner{commands: map[string]mockResult{
+		"git remote get-url origin": {output: "https://github.com/example-owner/repo.git"},
+		prListKey("example-owner/repo", "example-owner", "owner-fix"): {
+			output: `[{"url":"https://github.com/example-owner/repo/pull/1"}]`,
+		},
+		prListKey("upstream-org/repo", "example-owner", "owner-fix"): {
+			output: `[{"url":"https://github.com/upstream-org/repo/pull/2"}]`,
+		},
+	}}
+
+	got := capturePRs(r, "owner-fix")
+
+	assertOutputLines(t, []string{
+		"pr: https://github.com/example-owner/repo/pull/1",
+		"pr: https://github.com/upstream-org/repo/pull/2",
+	}, got)
+}
+
+func TestCapturePRsUsesNoGhPlaceholders(t *testing.T) {
+	var seen []string
+	r := recordingRunner{seen: &seen}
+	t.Setenv("KELOS_UPSTREAM_REPO", "")
+
+	capturePRs(r, "owner-fix")
+
+	want := "gh api repos/org/repo/pulls --method GET -f head=org:owner-fix -f state=open --jq [.[]|{url:.html_url}]"
+	if len(seen) != 2 || seen[1] != want {
+		t.Fatalf("unexpected calls: %q", seen)
+	}
+	// gh expands placeholders in the endpoint, so it must be literal.
+	if endpoint := strings.Fields(seen[1])[2]; strings.ContainsAny(endpoint, "{:") {
+		t.Errorf("endpoint %q has a placeholder-like token", endpoint)
+	}
+}
+
+type recordingRunner struct{ seen *[]string }
+
+func (r recordingRunner) run(name string, args ...string) (string, error) {
+	key := name + " " + strings.Join(args, " ")
+	*r.seen = append(*r.seen, key)
+	if key == "git remote get-url origin" {
+		return "git@github.com:org/repo.git", nil
+	}
+	return "", fmt.Errorf("not mocked")
+}
+
+func TestOriginOwnerRepoForms(t *testing.T) {
+	tests := []struct {
+		url         string
+		owner, repo string
+		ok          bool
+	}{
+		{"https://github.com/org/repo.git", "org", "repo", true},
+		{"https://github.com/org/repo", "org", "repo", true},
+		{"https://github.com/org/repo/", "org", "repo", true},
+		{"https://x-access-token@github.com/org/repo.git", "org", "repo", true},
+		{"git@github.com:org/repo.git", "org", "repo", true},
+		{"git@github.com:org/repo", "org", "repo", true},
+		{"ssh://git@github.com/org/my.repo.git", "org", "my.repo", true},
+		{"https://github.com/org/repo.name.git", "org", "repo.name", true},
+		{"/local/path", "", "", false},
+		{"https://github.com/onlyowner", "", "", false},
+		{"", "", "", false},
+	}
+	for _, tt := range tests {
+		r := mockRunner{commands: map[string]mockResult{
+			"git remote get-url origin": {output: tt.url},
+		}}
+		owner, repo, ok := originOwnerRepo(r)
+		if ok != tt.ok || owner != tt.owner || repo != tt.repo {
+			t.Errorf("%q: got %q %q %v, want %q %q %v", tt.url, owner, repo, ok, tt.owner, tt.repo, tt.ok)
+		}
+	}
+}
+
+func TestCapturePRsOriginUnavailable(t *testing.T) {
+	r := mockRunner{commands: map[string]mockResult{
+		"git remote get-url origin": {err: fmt.Errorf("no such remote")},
+	}}
+	if got := capturePRs(r, "branch"); got != nil {
+		t.Errorf("expected no PRs, got %v", got)
+	}
 }
